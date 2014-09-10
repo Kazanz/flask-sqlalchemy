@@ -242,8 +242,8 @@ class BindsTestCase(unittest.TestCase):
                              app.config['SQLALCHEMY_BINDS'][key])
 
         # do the models have the correct engines?
-        self.assertEqual(db.metadata.tables['foo'].info['bind_key'], 'foo')
-        self.assertEqual(db.metadata.tables['bar'].info['bind_key'], 'bar')
+        self.assertEqual(db.get_metadata(bind='foo').tables['foo'].info['bind_key'], 'foo')
+        self.assertEqual(db.get_metadata(bind='bar').tables['bar'].info['bind_key'], 'bar')
         self.assertEqual(db.metadata.tables['baz'].info.get('bind_key'), None)
 
         # see the tables created in an engine
@@ -261,6 +261,82 @@ class BindsTestCase(unittest.TestCase):
         metadata.reflect(bind=db.get_engine(app))
         self.assertEqual(len(metadata.tables), 1)
         self.assertTrue('baz' in metadata.tables)
+
+        # do the session have the right binds set?
+        self.assertEqual(db.get_binds(app), {
+            Foo.__table__: db.get_engine(app, 'foo'),
+            Bar.__table__: db.get_engine(app, 'bar'),
+            Baz.__table__: db.get_engine(app, None)
+        })
+
+    def test_binds_with_same_table_name(self):
+        import tempfile
+        _, db1 = tempfile.mkstemp()
+        _, db2 = tempfile.mkstemp()
+
+        def _remove_files():
+            import os
+            try:
+                os.remove(db1)
+                os.remove(db2)
+            except IOError:
+                pass
+        atexit.register(_remove_files)
+
+        app = flask.Flask(__name__)
+        app.config['SQLALCHEMY_ENGINE'] = 'sqlite://'
+        app.config['SQLALCHEMY_BINDS'] = {
+            'foo':      'sqlite:///' + db1,
+            'bar':      'sqlite:///' + db2
+        }
+        db = sqlalchemy.SQLAlchemy(app)
+
+        class Foo(db.Model):
+            __bind_key__ = 'foo'
+            __tablename__ = 'users'
+            __table_args__ = {"info": {"bind_key": "foo"}}
+            id = db.Column(db.Integer, primary_key=True)
+
+        class Bar(db.Model):
+            __bind_key__ = 'bar'
+            __tablename__ = 'users'
+            id = db.Column(db.Integer, primary_key=True)
+
+        class Baz(db.Model):
+            __tablename__ = 'users'
+            id = db.Column(db.Integer, primary_key=True)
+
+        db.create_all()
+
+        # simple way to check if the engines are looked up properly
+        self.assertEqual(db.get_engine(app, None), db.engine)
+        for key in 'foo', 'bar':
+            engine = db.get_engine(app, key)
+            connector = app.extensions['sqlalchemy'].connectors[key]
+            self.assertEqual(engine, connector.get_engine())
+            self.assertEqual(str(engine.url),
+                             app.config['SQLALCHEMY_BINDS'][key])
+
+        # do the models have the correct engines?
+        self.assertEqual(db.get_metadata(bind='foo').tables['users'].info['bind_key'], 'foo')
+        self.assertEqual(db.get_metadata(bind='bar').tables['users'].info['bind_key'], 'bar')
+        self.assertEqual(db.metadata.tables['users'].info.get('bind_key'), None)
+
+        # see the tables created in an engine
+        metadata = db.MetaData()
+        metadata.reflect(bind=db.get_engine(app, 'foo'))
+        self.assertEqual(len(metadata.tables), 1)
+        self.assertTrue('users' in metadata.tables)
+
+        metadata = db.MetaData()
+        metadata.reflect(bind=db.get_engine(app, 'bar'))
+        self.assertEqual(len(metadata.tables), 1)
+        self.assertTrue('users' in metadata.tables)
+
+        metadata = db.MetaData()
+        metadata.reflect(bind=db.get_engine(app))
+        self.assertEqual(len(metadata.tables), 1)
+        self.assertTrue('users' in metadata.tables)
 
         # do the session have the right binds set?
         self.assertEqual(db.get_binds(app), {

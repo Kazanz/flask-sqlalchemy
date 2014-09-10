@@ -27,6 +27,7 @@ from sqlalchemy.orm.session import Session as SessionBase
 from sqlalchemy.event import listen
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
+from sqlalchemy.schema import MetaData
 from flask.ext.sqlalchemy._compat import iteritems, itervalues, xrange, \
      string_types
 
@@ -59,11 +60,11 @@ before_models_committed = _signals.signal('before-models-committed')
 
 def _make_table(db):
     def _make_table(*args, **kwargs):
-        if len(args) > 1 and isinstance(args[1], db.Column):
-            args = (args[0], db.metadata) + args[1:]
         info = kwargs.pop('info', None) or {}
         info.setdefault('bind_key', None)
         kwargs['info'] = info
+        if len(args) > 1 and isinstance(args[1], db.Column):
+            args = (args[0], db.get_metadata(bind=info['bind_key'])) + args[1:]
         return sqlalchemy.Table(*args, **kwargs)
     return _make_table
 
@@ -533,6 +534,9 @@ class _BoundDeclarativeMeta(DeclarativeMeta):
 
     def __init__(self, name, bases, d):
         bind_key = d.pop('__bind_key__', None)
+        if bind_key not in self._metadata:
+            self._metadata[bind_key] = MetaData()
+        self.metadata = self._metadata[bind_key]
         DeclarativeMeta.__init__(self, name, bases, d)
         if bind_key is not None:
             self.__table__.info['bind_key'] = bind_key
@@ -666,6 +670,7 @@ class SQLAlchemy(object):
         )
 
         self.session = self.create_scoped_session(session_options)
+        Model._metadata = {}
         self.Model = self.make_declarative_base()
         self._engine_lock = Lock()
 
@@ -684,6 +689,9 @@ class SQLAlchemy(object):
     def metadata(self):
         """Returns the metadata"""
         return self.Model.metadata
+
+    def get_metadata(self, bind=None):
+        return self.Model._metadata.get(bind, None)
 
     def create_scoped_session(self, options=None):
         """Helper factory method that creates a scoped session.  It
@@ -849,7 +857,7 @@ class SQLAlchemy(object):
     def get_tables_for_bind(self, bind=None):
         """Returns a list of all tables relevant for a bind."""
         result = []
-        for table in itervalues(self.Model.metadata.tables):
+        for table in itervalues(self.get_metadata(bind=bind).tables):
             if table.info.get('bind_key') == bind:
                 result.append(table)
         return result
@@ -883,7 +891,7 @@ class SQLAlchemy(object):
             if not skip_tables:
                 tables = self.get_tables_for_bind(bind)
                 extra['tables'] = tables
-            op = getattr(self.Model.metadata, operation)
+            op = getattr(self.get_metadata(bind=bind), operation)
             op(bind=self.get_engine(app, bind), **extra)
 
     def create_all(self, bind='__all__', app=None):
