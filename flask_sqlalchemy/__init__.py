@@ -691,7 +691,9 @@ class SQLAlchemy(object):
         return self.Model.metadata
 
     def get_metadata(self, bind=None):
-        return self.Model._metadata.get(bind, None)
+        if bind not in self.Model._metadata:
+            self.Model._metadata[bind] = MetaData()
+        return self.Model._metadata.get(bind)
 
     def create_scoped_session(self, options=None):
         """Helper factory method that creates a scoped session.  It
